@@ -176,13 +176,11 @@ def commit_db():
                                   password=env.get('DB_PASSWORD'),
                                   host=env.get('HOST'),
                                   port=env.get('PORT'))
-    workers = (
-        'worker_name',
-        'worker_name',
-        'worker_name',
-        'worker_name',
-        'worker_name'
-        )
+    
+    cursor = connection.cursor()
+    cursor.execute(f'select full_name from {env.get("WORKER_TABLE")}')
+    workers = [name[0] for name in cursor.fetchall()]
+
     ou = WorkerParser()
     for i in range(5):
         result = ou.daterange(workers[i])
