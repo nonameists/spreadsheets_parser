@@ -110,6 +110,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# ide
+.idea
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -127,3 +130,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+
+# google auth credentials file
+client_secret.json
+
