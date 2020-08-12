@@ -1,7 +1,12 @@
+import logging
+import os
+import smtplib
+import sys
 import time
 from datetime import datetime, timedelta
 from os import environ as env
 
+import daemon
 import dictdiffer
 import psycopg2
 from dotenv import load_dotenv
@@ -23,7 +28,7 @@ class Checker:
             return
 
     def check_modified(self, file_id):
-        result = service.files().get(fileId=file_id, fields='modifiedTime').execute()
+        result = self.service.files().get(fileId=file_id, fields='modifiedTime').execute()
         last_modified = result['modifiedTime'].split('.')[0]
         last_modified = datetime.strptime(last_modified, '%Y-%m-%dT%H:%M:%S') + timedelta(hours=3)
 
@@ -36,6 +41,32 @@ class Checker:
         # print((time_now - time_modified))
 
         return compare_time > (time_now - time_modified)
+
+
+def send_email(message):
+    '''
+    function send email using gmail service
+    '''
+    server = smtplib.SMTP('smtp.gmail.com', 587)
+    server.ehlo()
+    server.starttls()
+    server.ehlo()
+
+    server.login('email@login', 'email@password')
+
+    sbjct = f'Problem with scheduler parser'
+    toAddr = ('--email--address--')
+    fromAddr = 'electricsender@gmail.com'
+    body = message
+    header = 'To:' + ','.join(toAddr) + '\n' + 'From: ' + fromAddr + '\n' + f'Subject:{sbjct}' '\n'
+    msg = header + body
+    #print(f'MSG {msg}')
+    server.sendmail(
+        'email@address',
+        toAddr,
+        msg)
+
+    server.quit()
 
 
 def check_db():
@@ -93,19 +124,40 @@ def change_db_item(compare_list, connection, worker):
         connection.commit()
 
 
-if __name__ == "__main__":
-    load_dotenv()
+def main():
+    logger = logging.getLogger("CheckerLoger")
+    logger.setLevel(logging.INFO)
+    log = logging.FileHandler(os.path.join(os.getcwd(), 'CheckerApp.log'))
+    formatter = logging.Formatter('{asctime} - {name} - {levelname} - {message}',
+                                  datefmt='%Y-%m-%d %H:%M:%S', style='{')
+    log.setFormatter(formatter)
+    logger.addHandler(log)
 
     SCOPES = ['https://www.googleapis.com/auth/drive']
     SERVICE_ACCOUNT_FILE = env.get('SERVICE_ACCOUNT_FILE')
     credentials = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
     service = build('drive', 'v3', credentials=credentials)
+    logger.info(SCOPES[0])
+    logger.info(env.get('SERVICE_ACCOUNT_FILE'))
 
     checker = Checker(service)
     while True:
-        time_now = datetime.now()
-        modified = checker.was_modified()
-        if modified:
-            check_db()
-        else:
+        try:
+            modified = checker.was_modified()
+            if modified:
+                logger.info(f'modified at {datetime.now()}')
+                check_db()
+            else:
+                time.sleep(600)
+        except:
+            exc = sys.exc_info()[0]
+            logger.info(exc)
+            message = f'Exception occured {exc}'
+            send_email(message)
             time.sleep(600)
+            continue
+
+if __name__ == "__main__":
+    load_dotenv()
+    with daemon.DaemonContext(working_directory=os.getcwd()):
+        main()
