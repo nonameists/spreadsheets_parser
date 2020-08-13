@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import re
 import time
 from datetime import datetime, timedelta
@@ -176,7 +175,7 @@ def commit_db():
                                   password=env.get('DB_PASSWORD'),
                                   host=env.get('HOST'),
                                   port=env.get('PORT'))
-    
+
     cursor = connection.cursor()
     cursor.execute(f'select full_name from {env.get("WORKER_TABLE")}')
     workers = [name[0] for name in cursor.fetchall()]

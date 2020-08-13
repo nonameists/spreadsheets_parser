@@ -1,8 +1,8 @@
 import logging
 import os
 import smtplib
-import sys
 import time
+import traceback
 from datetime import datetime, timedelta
 from os import environ as env
 
@@ -148,7 +148,7 @@ def main():
             else:
                 time.sleep(600)
         except:
-            exc = sys.exc_info()[0]
+            exc = traceback.print_exc()
             logger.info(exc)
             message = f'Exception occured {exc}'
             send_email(message)
