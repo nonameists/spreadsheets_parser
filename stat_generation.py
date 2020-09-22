@@ -1,21 +1,23 @@
-from Google import Create_Service
-import os
+import datetime as dt
 from datetime import datetime
+from os import environ as env
+
 import psycopg2
 from dotenv import load_dotenv
-from os import environ as env
+from googleapiclient.discovery import build
+from oauth2client.service_account import ServiceAccountCredentials
+
 from check_strikes import StrikeChecker
 
 
 class StatWorker:
-    def __init__(self, oauth2_secret):
-        self.oauth2_secret = oauth2_secret
-        folder_path = os.getcwd()
-        client_secret_file = os.path.join(folder_path, self.oauth2_secret)
+    def __init__(self):
+
         api_service_name = 'sheets'
         api_version = 'v4'
-        scopes = ['https://spreadsheets.google.com/feeds']
-        self.service = Create_Service(client_secret_file, api_service_name, api_version, scopes)
+        scopes = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        creds = ServiceAccountCredentials.from_json_keyfile_name(env.get('SERVICE_ACCOUNT_FILE'), scopes)
+        self.service = build(api_service_name, api_version, credentials=creds)
         self.sheet = self.__create_spreadsheet()
         self.title = self.sheet['sheets'][0]['properties']['title']
         self.cell_range_insert = 'A1'
@@ -28,14 +30,20 @@ class StatWorker:
 
         drive_service_name = 'drive'
         drive_api_version = 'v3'
-        drive_scopes = ['https://www.googleapis.com/auth/drive']
-        self.drive_service = Create_Service(client_secret_file, drive_service_name, drive_api_version, drive_scopes)
+        self.drive_service = build(drive_service_name, drive_api_version, credentials=creds)
+
+    def __last_month(self):
+        today = dt.date.today()
+        first = today.replace(day=1)
+        last_month = first - dt.timedelta(days=1)
+        return last_month.strftime("%B")
+
 
 
     def __create_spreadsheet(self):
         spreadsheet_body = {
             'properties': {
-                'title': f"{datetime.now().strftime('%B-%Y')} statistics"
+                'title': f"{self.__last_month()}-{datetime.now().strftime('%Y')} statistics"
             }
         }
         sheet = self.service.spreadsheets().create(body=spreadsheet_body).execute()
@@ -194,13 +202,11 @@ class StatWorker:
         return len(result.get('values'))
 
     def get_non_con(self):
-        query = "SELECT parsing_workers.full_name, date, task FROM parsing_tasks JOIN parsing_workers ON" \
+        query = "SELECT parsing_workers.full_name, TO_CHAR(date,'DD.MM.YYYY'), task FROM parsing_tasks JOIN parsing_workers ON" \
                           " parsing_tasks.worker_id=parsing_workers.id WHERE task ~ '^[1-9]' AND connection = 't'" \
                           " AND strike = 'f' AND date < (SELECT CURRENT_DATE) ORDER BY full_name, date"
         self.cursor.execute(query)
-
         result = self.cursor.fetchall()
-        result = [(item[0], str(item[1]), item[2]) for item in result]
 
         if result:
             start_row = self.get_last_row_number()
@@ -215,13 +221,11 @@ class StatWorker:
             return result
 
     def get_non_fix(self):
-        query = "SELECT parsing_workers.full_name, date, task FROM parsing_tasks JOIN parsing_workers ON" \
+        query = "SELECT parsing_workers.full_name, TO_CHAR(date,'DD.MM.YYYY'), task FROM parsing_tasks JOIN parsing_workers ON" \
                           " parsing_tasks.worker_id=parsing_workers.id WHERE task ~ '^[1-9]' AND connection = 'f'" \
                           " AND strike = 'f' AND date < (SELECT CURRENT_DATE) ORDER BY full_name, date"
         self.cursor.execute(query)
-
         result = self.cursor.fetchall()
-        result = [(item[0], str(item[1]), item[2]) for item in result]
 
         if result:
             start_row = self.get_last_row_number()
@@ -252,7 +256,7 @@ class StatWorker:
         user_permission = {
             'type': 'user',
             'role': 'writer',
-            'emailAddress': 'main@mk-net.ru'
+            'emailAddress': 'EMAIL_ADDRESS'
             }
         self.drive_service.permissions().create(
             fileId=self.sheet['spreadsheetId'],
@@ -323,7 +327,7 @@ class StatWorker:
                     "addChart": {
                         "chart": {
                             "spec": {
-                                "title": f"График за {datetime.now().month}-{datetime.now().year}",
+                                "title": f"График за {self.__last_month()}-{datetime.now().year}",
                                 "basicChart": {
                                     "chartType": "COLUMN",
                                     "legendPosition": "BOTTOM_LEGEND",
@@ -451,6 +455,6 @@ class StatWorker:
 if __name__ == "__main__":
     load_dotenv()
 
-    parser = StatWorker(env.get('SERVICE_OAUTH_FILE'))
+    parser = StatWorker()
     parser.fill_data()
 

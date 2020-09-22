@@ -1,3 +1,4 @@
+import datetime as dt
 import logging
 import os
 import smtplib
@@ -13,19 +14,17 @@ from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-from utils import WorkerParser
-
 
 class Checker:
     def __init__(self, service_obj):
         self.service = service_obj
 
-    def __get_file_id(self, filename):
+    def get_file_id(self, filename):
         files = self.service.files().list(fields='nextPageToken, files(id, name)').execute()
         for file in files['files']:
             if file['name'] == filename:
                 return file['id']
-            return
+        return
 
     def check_modified(self, file_id):
         result = self.service.files().get(fileId=file_id, fields='modifiedTime').execute()
@@ -37,8 +36,8 @@ class Checker:
     def was_modified(self):
         compare_time = timedelta(seconds=600)
         time_now = datetime.now().replace(microsecond=0)
-        time_modified = self.check_modified(self.__get_file_id(env.get('FILENAME')))
-        # print((time_now - time_modified))
+        fileid = self.get_file_id(env.get('FILENAME'))
+        time_modified = self.check_modified(fileid)
 
         return compare_time > (time_now - time_modified)
 
@@ -52,24 +51,23 @@ def send_email(message):
     server.starttls()
     server.ehlo()
 
-    server.login('email@login', 'email@password')
+    server.login('EMAIL_LOGIN', 'EMAIL_PASSWORD')
 
     sbjct = f'Problem with scheduler parser'
-    toAddr = ('--email--address--')
-    fromAddr = 'electricsender@gmail.com'
+    toAddr = ('TO_ADDRESS')
+    fromAddr = 'FROM_ADDRESS'
     body = message
     header = 'To:' + ','.join(toAddr) + '\n' + 'From: ' + fromAddr + '\n' + f'Subject:{sbjct}' '\n'
     msg = header + body
-    #print(f'MSG {msg}')
     server.sendmail(
-        'email@address',
+        'FROM_ADDRESS',
         toAddr,
         msg)
 
     server.quit()
 
 
-def check_db():
+def check_db(worksheet_object):
     connection = psycopg2.connect(dbname=env.get('DB_NAME_2'),
                                   user=env.get('DB_USER'),
                                   password=env.get('DB_PASSWORD'),
@@ -80,19 +78,14 @@ def check_db():
     cursor.execute(f'select full_name from {env.get("WORKER_TABLE")}')
     workers = [name[0] for name in cursor.fetchall()]
 
-
-    ou = WorkerParser()
     for i in range(len(workers)):
-        # print(workers[i])
-        worker_id = ou.get_worker_id(workers[i])
-        result = ou.daterange(workers[i], checker=True)
+        worker_id = worksheet_object.get_worker_id(workers[i])
+        result = worksheet_object.daterange(workers[i], checker=True)
         compare_dict = get_data_from_db(worker_id, result, connection.cursor())
 
         comparisons = list(dictdiffer.diff(result, compare_dict))
-        # print('Comparisons: ', comparisons)
         if comparisons:
             change_db_item(comparisons, connection, worker_id)
-
         time.sleep(150)
 
 
@@ -140,22 +133,42 @@ def main():
 
     checker = Checker(service)
     while True:
-        try:
-            modified = checker.was_modified()
-            if modified:
-                logger.info(f'modified at {datetime.now()}')
-                check_db()
-            else:
+        start_time = dt.time(8, 00)
+        end_time = dt.time(22, 30)
+        current_time = datetime.now().time()
+        if start_time < current_time < end_time:
+            try:
+                modified = checker.was_modified()
+                if modified:
+                    logger.info(f'modified at {datetime.now()}')
+                    check_db(service)
+                else:
+                    logger.info(f'nothing to check {datetime.now()}')
+                    time.sleep(600)
+            except:
+                exc = traceback.print_exc()
+                logger.info(exc)
+                message = f'Exception occured {exc}'
+                send_email(message)
                 time.sleep(600)
-        except:
-            exc = traceback.print_exc()
-            logger.info(exc)
-            message = f'Exception occured {exc}'
-            send_email(message)
-            time.sleep(600)
-            continue
+                continue
 
 if __name__ == "__main__":
     load_dotenv()
     with daemon.DaemonContext(working_directory=os.getcwd()):
         main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,5 +1,6 @@
 import re
 import time
+import itertools
 from datetime import datetime, timedelta
 from os import environ as env
 
@@ -39,6 +40,11 @@ class WorkerParser:
 
         return cell.col, cell.row
 
+    def __get_column(self, raw_address):
+        if raw_address[1].isdigit():
+            return raw_address[0]
+        return raw_address[:2]
+
     def get_tasks(self, worker, date_value=None):
         result = {}
 
@@ -50,25 +56,26 @@ class WorkerParser:
             date = datetime.today().date().strftime("%d.%m.%Y")
 
         try:
-            date_column = self.sheet.find(date).col
+            date_column = self.sheet.find(date).address
 
         except gspread.exceptions.CellNotFound:
             print(f'На дату {date_value} еще не составлен график')
             return
 
-        raw_data = self.sheet.range(worker_row, date_column, worker_row + 9, date_column)
-        time_data = raw_data[::2]
-        task_data = raw_data[1::2]
-        connections = self.__is_connection(task_data)
-        strikes = self.__is_strikethrough(task_data)
+        column = self.__get_column(date_column)
+        column_range = f'{column + str(worker_row)}:{column + str(worker_row + 9)}'
+        data = self.sheet.batch_get([column_range])[0]
 
-        data = [(time_.value, task.value, cn, st)
-                for time_, task, cn, st in zip(time_data, task_data, connections, strikes)
-                if time_.value]
+        time_ranges = [item[0] for item in data[::2]]
+        tasks = [item[0] if item else 'Свободная ячейка' for item in data[1::2]]
+        complete_data = list(itertools.zip_longest(time_ranges, tasks, fillvalue='Свободная ячейка'))
+
+        connections = self.__is_connection(complete_data)
+        strikes = self.__is_strikethrough(complete_data)
+
+        data = [(time_task[0],time_task[1], cn, st) for time_task, cn, st in zip(complete_data, connections, strikes)]
 
         for t_time, t_value, t_con, t_strike in data:
-            if not t_value:
-                t_value = 'Свободная ячейка'
             result[self.__pretty_time(t_time)] = (t_value, t_con, t_strike)
 
         return result
@@ -80,34 +87,44 @@ class WorkerParser:
 
         return self.get_tasks(worker, date_value)
 
-    def next_two_weeks_tasks(self):
-        pass
+    def get_last_date(self, worker):
+        query = f"SELECT date FROM parsing_tasks join parsing_workers on parsing_tasks.worker_id=parsing_workers.id" \
+                f" where parsing_workers.full_name = '{worker}' ORDER BY date DESC LIMIT 1"
+        self.cursor.execute(query)
+        return self.cursor.fetchall()[0][0]
+
+    def __working_day(self,raw_column_data):
+        data = raw_column_data[1]
+        if not data or data[0].isdigit():
+            return [True] * 5
+        return [False] * 5
 
     def __is_connection(self, raw_task_list):
+        task_list = [item[1] for item in raw_task_list]
         task_data = []
-        for task in raw_task_list:
+
+        for task in task_list:
             try:
-                task = int(task.value)
+                task = int(task)
             except ValueError:
                 task = 0
             task_data.append(task)
-        print('task_data', task_data)
         result = [i < 80000 and i != 0 for i in task_data]
-        print('is connection result', result)
 
         return result
 
-    def __is_strikethrough(self, raw_task_list):
+    def __is_strikethrough(self, raw_list):
+        options = ('вых', 'Свободная ячейка', 'не занимать', 'болен')
+        task_list = [item[1] for item in raw_list]
         result = []
-        for task in raw_task_list:
-            if not task.value:
+
+        for task in task_list:
+            if task in options:
                 result.append(False)
                 continue
-            task_column, task_row = self.__task_coordinates(task.value)
-            converted_column = self.__column_string(task_column)
-            res = gspread_formatting.get_effective_format(self.sheet, converted_column+str(task_row))
+            task_address = self.sheet.find(task).address
+            res = gspread_formatting.get_effective_format(self.sheet, task_address)
             result.append(res.textFormat.strikethrough)
-
         return result
 
     def __check_date_format(self, date_value):
@@ -153,16 +170,12 @@ class WorkerParser:
     def daterange(self, worker, checker=None):
         start_date = datetime.today()
         if checker:
-            self.cursor.execute('SELECT date FROM parsing_tasks ORDER BY date DESC LIMIT 1')
-            end_date = str(self.cursor.fetchone()[0])
-            end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
-            print('END DATE', end_date)
+            end_date = datetime.today() + timedelta(days=2)
         else:
-            end_date = datetime.today() + timedelta(days=7)
+            end_date = datetime.today().date() + timedelta(days=3)
         result = {}
 
         for dt in rrule(DAILY, dtstart=start_date, until=end_date):
-            print(dt.strftime("%d.%m.%Y"))
             output = self.get_date_tasks(worker, dt.strftime("%d.%m.%Y"))
             if output:
                 result[dt.date()] = output
@@ -181,20 +194,18 @@ def commit_db():
     workers = [name[0] for name in cursor.fetchall()]
 
     ou = WorkerParser()
-    for i in range(5):
+    for i in range(len(workers)):
         result = ou.daterange(workers[i])
         for date in result:
             for time_range in result[date]:
                 with connection:
-                    with connection.cursor() as cursor:
-                        cursor.execute(f"SELECT id FROM parsing_workers WHERE full_name = '{workers[i]}'")
-                        worker_id = cursor.fetchone()[0]
-                        cursor.execute(
-                            f"INSERT INTO parsing_tasks(worker_id,time_range,date,task,connection,strike) VALUES({worker_id},"
-                            f"'{time_range}',"
-                            f"'{date}',"
-                            f"'{result[date][0]}', '{result[date][1]}','{result[date][2]}')"
-                        )
+                    cursor.execute(f"SELECT id FROM parsing_workers WHERE full_name = '{workers[i]}'")
+                    worker_id = cursor.fetchone()[0]
+                    cursor.execute(
+                        f"INSERT INTO parsing_tasks(worker_id,time_range,date,task,connection,strike) VALUES({worker_id},"
+                        f"'{time_range}',"
+                        f"'{date}',"
+                        f"'{result[date][time_range][0]}', '{result[date][time_range][1]}','{result[date][time_range][2]}')")
                 connection.commit()
 
         time.sleep(150)

@@ -2,7 +2,6 @@ from os import environ as env
 
 import gspread
 import gspread_formatting
-from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
 
 
@@ -10,7 +9,7 @@ class StrikeChecker:
     def __init__(self):
         self.sheet = self.__get_scheduler()
 
-    def __get_scheduler(self, share=None):
+    def __get_scheduler(self):
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         creds = ServiceAccountCredentials.from_json_keyfile_name(env.get('SERVICE_ACCOUNT_FILE'), scope)
         client = gspread.authorize(creds)
@@ -20,7 +19,6 @@ class StrikeChecker:
 
     def is_strike_current(self, task):
         cell = self.sheet.find(task).address
-        #print(cell)
         result = gspread_formatting.get_effective_format(self.sheet, cell)
 
         return result.textFormat.strikethrough

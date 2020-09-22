@@ -133,5 +133,6 @@ dmypy.json
 
 
 # google auth credentials file
-client_secret.json
+client_secret*
+client.json
 
